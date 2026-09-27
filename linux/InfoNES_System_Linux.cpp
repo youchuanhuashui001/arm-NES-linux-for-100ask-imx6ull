@@ -60,16 +60,21 @@ static int *zoom_y_tab;
 extern int InitJoypadInput(void);
 extern int GetJoypadInput(void);
 
-static int lcd_fb_display_px(WORD color, int x, int y)
+static inline unsigned int rgb555_to_rgb888(WORD color)
 {
 	unsigned int red = (color >> 10) & 0x1f;
 	unsigned int green = (color >> 5) & 0x1f;
 	unsigned int blue = color & 0x1f;
-	unsigned int *pixel = (unsigned int *)(fb_mem + y*line_width + x*px_width);
 	// 完整线性换算 round(v × 255 / 31) 的快速近似，把 5bit 颜色转换成 8 bit 颜色
-	*pixel = (((red << 3) | (red >> 2)) << 16) |
-	         (((green << 3) | (green >> 2)) << 8) |
-	         ((blue << 3) | (blue >> 2));
+	return (((red << 3) | (red >> 2)) << 16) |
+	       (((green << 3) | (green >> 2)) << 8) |
+	       ((blue << 3) | (blue >> 2));
+}
+
+static int lcd_fb_display_px(WORD color, int x, int y)
+{
+	unsigned int *pixel = (unsigned int *)(fb_mem + y*line_width + x*px_width);
+	*pixel = rgb555_to_rgb888(color);
 
 	return 0;
 }
@@ -674,20 +679,36 @@ void *InfoNES_MemorySet( void *dest, int c, int count )
 /*===================================================================*/
 void InfoNES_LoadFrame()
 {
+	static unsigned int *row_pixels;
 	int x,y;
-	int line_width;
+	int src_row, previous_src_row = -1;
 	WORD wColor;
 
 	//修正 即便没有 LCD 也可以出声
 	if(0 < fb_fd)
 	{
+		if (!row_pixels)
+			row_pixels = (unsigned int *)malloc(lcd_width * sizeof(*row_pixels));
 		for (y = 0; y < lcd_height; y++ )
 		{
-			line_width = zoom_y_tab[y] * NES_DISP_WIDTH;
-			for (x = 0; x < lcd_width; x++ )
+			src_row = zoom_y_tab[y] * NES_DISP_WIDTH;
+			if (row_pixels)
 			{
-				wColor = WorkFrame[line_width  + zoom_x_tab[x]];
-				lcd_fb_display_px(wColor, x, y);
+				if (src_row != previous_src_row)
+				{
+					for (x = 0; x < lcd_width; x++)
+						row_pixels[x] = rgb555_to_rgb888(WorkFrame[src_row + zoom_x_tab[x]]);
+					previous_src_row = src_row;
+				}
+				memcpy(fb_mem + y * line_width, row_pixels, lcd_width * px_width);
+			}
+			else
+			{
+				for (x = 0; x < lcd_width; x++ )
+				{
+					wColor = WorkFrame[src_row + zoom_x_tab[x]];
+					lcd_fb_display_px(wColor, x, y);
+				}
 			}
 		}
 	}
@@ -828,7 +849,7 @@ void InfoNES_SoundClose( void )
 void InfoNES_SoundOutput( int samples, BYTE *wave1, BYTE *wave2, BYTE *wave3, BYTE *wave4, BYTE *wave5 )
 {
 	int i;
-	int ret;
+	snd_pcm_sframes_t ret;
 	unsigned char wav;
 	unsigned char *pcmBuf = (unsigned char *)malloc(samples);
 
