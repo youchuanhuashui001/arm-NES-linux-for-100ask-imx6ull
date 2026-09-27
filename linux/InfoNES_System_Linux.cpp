@@ -62,12 +62,15 @@ extern int GetJoypadInput(void);
 
 static int lcd_fb_display_px(WORD color, int x, int y)
 {
-	unsigned char  *pen8;
-	unsigned short *pen16;
-	pen8 = (unsigned char *)(fb_mem + y*line_width + x*px_width);
-	pen16 = (unsigned short *)pen8;
-	*pen16 = color;
-	
+	unsigned int red = (color >> 10) & 0x1f;
+	unsigned int green = (color >> 5) & 0x1f;
+	unsigned int blue = color & 0x1f;
+	unsigned int *pixel = (unsigned int *)(fb_mem + y*line_width + x*px_width);
+	// 完整线性换算 round(v × 255 / 31) 的快速近似，把 5bit 颜色转换成 8 bit 颜色
+	*pixel = (((red << 3) | (red >> 2)) << 16) |
+	         (((green << 3) | (green >> 2)) << 8) |
+	         ((blue << 3) | (blue >> 2));
+
 	return 0;
 }
 
@@ -85,6 +88,15 @@ static int lcd_fb_init()
 	{
 		close(fb_fd);
 		printf("cat't ioctl /dev/fb0 \n");
+		return -1;
+	}
+	if (var.bits_per_pixel != 32 || var.red.offset != 16 || var.red.length != 8 ||
+	    var.green.offset != 8 || var.green.length != 8 ||
+	    var.blue.offset != 0 || var.blue.length != 8 || var.transp.length != 0)
+	{
+		printf("unsupported /dev/fb0 pixel format\n");
+		close(fb_fd);
+		fb_fd = -1;
 		return -1;
 	}
 	
